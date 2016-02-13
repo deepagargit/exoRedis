@@ -32,6 +32,7 @@ func main() {
 	addr := ":15000"
 
 	listener, err := net.Listen("tcp", addr)
+	
 	if err != nil {
 		log.Printf("Error: listen(): %s", err)
 		os.Exit(1)
@@ -60,30 +61,29 @@ func main() {
 	
 	sigs := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
-	var check bool = false
+	var sigCheck bool = false
 
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
-	//signal.Notify(c, os.Interrupt)
-	//signal.Notify(c, syscall.SIGTERM)
-	
-	
-	
 	go func(store *db, file string) {
 
 		sig := <-sigs
-		check = true
+		sigCheck = true
 
-		fmt.Println("Signal captured : ", sig)
+		fmt.Println("Server captured", sig, "signal")
+		listener.Close()
 		store.Save(file)
-
-		done <- true
-		
+		done <- true	
 	} (store, dbFile)
 	
 	var id int64
 	for {
 		conn, err := listener.Accept()
+
+		if sigCheck == true {
+			break
+		}
+
 		if err != nil {
 			log.Printf("Error: Accept(): %s", err)
 			continue
@@ -94,11 +94,11 @@ func main() {
 		go client.serve()
 	}
 	
-	if check == true {
-		fmt.Println("awaiting signal")
+	if sigCheck == true {
+		fmt.Println("Server awaiting exit ...")
 		<-done
 	}
-        fmt.Println("exiting")	
+        fmt.Println("Server Exiting")	
 }
 
 

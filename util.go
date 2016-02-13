@@ -53,10 +53,6 @@ func (client *client) readCommand() (*command, error) {
 		}
 
 		args := strings.Split(line, " ")
-		client.log("args len : %d", len(args))
-
-		
-		client.log("Name : %s", args[0])
 
 		return &command{Name: args[0], Args: args[1:]}, nil
 	}
@@ -106,7 +102,6 @@ func (client *client) serve() {
 		case "GET":
 			if len(cmd.Args) < 1 {
 				client.sendError(fmt.Errorf("GET expects 1 argument"))
-				//return
 				continue
 			}
 			val, ok := client.store.Get(cmd.Args[0])
@@ -121,7 +116,6 @@ func (client *client) serve() {
 	        case "GETBIT":
 			if len(cmd.Args) < 2 {
 				client.sendError(fmt.Errorf("GETBIT expects 2 argument"))
-				//return
 				continue
 			}
 			

@@ -116,9 +116,9 @@ func (store *db) Save(filename string) (bool){
 	 store.mapDBLock.Lock()
 	 store.setmapDBLock.Lock()
 
-	 defer store.mapDBLock.Lock()
-	 defer store.setmapDBLock.Lock()
-
+	 defer store.mapDBLock.Unlock()
+	 defer store.setmapDBLock.Unlock()
+	 
          // create a file
          dataFile, err := os.Create(filename)
 
@@ -129,7 +129,6 @@ func (store *db) Save(filename string) (bool){
 
          enc := gob.NewEncoder(dataFile)
          err = enc.Encode(store)
-
 	 if err != nil {
 		fmt.Printf("Save Encode error : ", err)
 		return false
@@ -247,6 +246,15 @@ func (store *db) MarshalBinary() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+
+
+
+
+
+
+
+
+
 func (store *db) UnmarshalBinary(data []byte) error {
 	
 	if store == nil {
@@ -307,7 +315,6 @@ func (store *db) UnmarshalBinary(data []byte) error {
 	if err != nil {
 		return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry len nil"))
 	}
-	fmt.Println(" len : ", len)
 	
 	for i:= 0 ; i<len; i++ {
 		var key string
