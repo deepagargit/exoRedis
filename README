@@ -1,0 +1,36 @@
+
+1. Install Golang on Windows
+https://golang.org/doc/install?download=go1.5.3.windows-amd64.msi
+
+
+2.  Install Git bash on Windows
+https://git-scm.com/download/win
+
+1. Install Git and Golang
+yum install git -y
+yum install golang -y
+
+2. Clone the repository
+$ git clone https://github.com/deepagargit/golang-encdec-to-disk ~/exoredis
+$ cd ~/exoredis
+
+3. Set the GOPATH
+$ export GOPATH = ~/exoredis
+
+4. Install golang packages 
+$ go get github.com/emirpasic/gods/sets/treeset
+
+
+
+
+1.	ZADD key score1 member1 [score2 member2] 
+Add one or more members to a sorted set, or update its score if it already exists
+
+2	ZCARD key 
+Get the number of members in a sorted set
+
+3	ZCOUNT key min max 
+Count the members in a sorted set with scores within the given values
+
+4.	ZRANGE key start stop [WITHSCORES] 
+Return a range of members in a sorted set, by index
