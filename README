@@ -1,17 +1,10 @@
 
-1. Install Golang on Windows
-https://golang.org/doc/install?download=go1.5.3.windows-amd64.msi
-
-
-2.  Install Git bash on Windows
-https://git-scm.com/download/win
-
 1. Install Git and Golang
 yum install git -y
 yum install golang -y
 
 2. Clone the repository
-$ git clone https://github.com/deepagargit/golang-encdec-to-disk ~/exoredis
+$ git clone https://github.com/deepagargit/exoredis ~/exoredis
 $ cd ~/exoredis
 
 3. Set the GOPATH
@@ -20,17 +13,166 @@ $ export GOPATH = ~/exoredis
 4. Install golang packages 
 $ go get github.com/emirpasic/gods/sets/treeset
 
+5. Compile 
+$ go build
+
+6. Run 
+$ ./exoRedis
 
 
+7. Commands
 
-1.	ZADD key score1 member1 [score2 member2] 
+a.	SET key value 
+This command sets the value at the specified key
+
+b	GET key 
+Get the value of a key.
+
+c.	SETBIT key offset value
+Sets or clears the bit at offset in the string value stored at key
+
+d.	GETBIT key offset
+Returns the bit value at offset in the string value stored at key
+
+e.	SETEX key seconds value
+Set the value with expiry of a key
+
+f.	SETNX key value
+Set the value of a key, only if the key does not exist
+
+g.	ZADD key score1 member1 [score2 member2] 
 Add one or more members to a sorted set, or update its score if it already exists
 
-2	ZCARD key 
+h.	ZCARD key 
 Get the number of members in a sorted set
 
-3	ZCOUNT key min max 
+i.	ZCOUNT key min max 
 Count the members in a sorted set with scores within the given values
 
-4.	ZRANGE key start stop [WITHSCORES] 
+j.	ZRANGE key start stop [WITHSCORES] 
 Return a range of members in a sorted set, by index
+
+k.	SAVE
+Save the DB to disk
+
+
+8. Example Execution
+a. GET Test
+	GET a1
+	(nil)
+
+b. GET\SET Test
+	SET a1 v
+	+OK
+	GET a1
+	v
+
+c. SET NX Test
+	SET a2 v2
+	+OK
+	GET a2
+	v2
+	SET a2 v3 NX
+	(integer) 0
+	SET a3 v3 NX
+	(integer) 1
+	GET a3
+	v3
+
+d. SET XX Test
+	GET a4
+	(nil)
+	SET a4 v4 XX
+	(integer) 0
+	SET a4 v4
+	+OK
+	GET a4
+	v4
+	SET a4 v5 XX
+	(integer) 1
+	GET a4
+	v5
+
+e. GETBIT\SETBIT Test
+	SETBIT a6 1 1
+	0
+	SETBIT a6 7 1
+	0
+	GET a6
+	A
+	GETBIT a6 0
+	0
+	GETBIT a6 1
+	1
+	GETBIT a6 7
+	1
+	GETBIT a6 8
+	0
+	GETBIT a6 3
+	0
+
+
+	SETBIT a7 0 0
+	0
+	SETBIT a7 1 1
+	0
+	SETBIT a7 2 1
+	0
+	SETBIT a7 3 1
+	0
+	SETBIT a7 4 1
+	0
+	SETBIT a7 5 1
+	0
+	SETBIT a7 6 1
+	0
+	SETBIT a7 7 1
+	0
+	SETBIT a7 9 1
+	0
+	SETBIT a7 11 1
+	0
+	SETBIT a7 14 1
+	0
+	GET a7
+	\x7fR
+
+	SETBIT a8 1 1
+	0
+	SETBIT a8 7 1
+	0
+	GET a8
+	A
+	GETBIT a8 1
+	1
+	GETBIT a8 7
+	1
+	GETBIT a8 4
+	0
+	SET a8 new
+	+OK
+	GET a8 new
+	new
+
+f. SET EX Test
+	SET a9 v9 EX 4
+	+OK
+	GET a9
+	v9
+
+	Evicted - key :  a9   val :  v9   Expiration :  1455483421297288220   Now:  1455483436149137600
+
+	GET a9
+	(nil)
+
+
+g. SET PX Test
+	SET a10 v10 PX 40000
+	+OK
+	GET a10
+	v10
+
+	Evicted - key :  a10   val :  v10   Expiration :  1455483514459816700   Now:  1455483526148285300
+
+	GET a10
+	(nil)

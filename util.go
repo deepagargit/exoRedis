@@ -1,3 +1,7 @@
+/* 
+	Copyright 2016 Deepak Agarwal
+	Author : Deepak Agarwal
+*/
 
 package main
 
@@ -6,12 +10,24 @@ import (
 	"fmt"
 	"log"
 	"io"
-	//"os"
 	"strconv"
 	"strings"
 	"time"
+	"net"
 )
 
+type client struct {
+	id     int64
+	conn   net.Conn
+	reader *bufio.Reader
+	store  *db
+}
+
+
+type command struct {
+	Name string
+	Args []string
+}
 
 func (client *client) log(msg string, args ...interface{}) {
 	prefix := fmt.Sprintf("Client #%d: ", client.id)
@@ -29,7 +45,7 @@ func (client *client) send(val string) {
 
 func (client *client) sendError(err error) {
 	client.logError(err.Error())
-	client.sendLine("-ERR " + err.Error() + "\r\n")
+	client.sendLine("-Error " + err.Error() + "\r\n")
 }
 
 func (client *client) sendLine(line string) {
@@ -53,8 +69,17 @@ func (client *client) readCommand() (*command, error) {
 		}
 
 		args := strings.Split(line, " ")
+	
+		argsSpaceTrim := make([]string, 0)
+		argsSpaceTrim = append(argsSpaceTrim, args[0])
 
-		return &command{Name: args[0], Args: args[1:]}, nil
+		for i:=1; i< len(args) && len(args[i]) != 0; i++ {
+			argsSpaceTrim = append(argsSpaceTrim, args[i])
+		}
+
+		cmd := command{Name: argsSpaceTrim[0], Args: argsSpaceTrim[1:]}
+		
+		return &cmd, nil
 	}
 }
 
@@ -96,7 +121,7 @@ func (client *client) serve() {
 				client.logError("readCommand(): %s", err)
 			}
 			return
-		}
+		} 
 
 		switch cmd.Name {
 		case "GET":
@@ -104,12 +129,13 @@ func (client *client) serve() {
 				client.sendError(fmt.Errorf("GET expects 1 argument"))
 				continue
 			}
-			val, ok := client.store.Get(cmd.Args[0])
+			val, errRet := client.store.Get(cmd.Args[0])
 
-			if ok == false {
-				client.send("nil\r\n")
-			} else {
+			if errRet == nil {
 				client.send(val)
+			} else {
+				client.send("(nil)")
+				fmt.Println(errRet)
 			}
 
 
@@ -127,26 +153,62 @@ func (client *client) serve() {
 				continue
 			}
 
-			val := client.store.GetBit(cmd.Args[0], offset)
-
-			client.send(val)
+			val, errRet := client.store.GetBit(cmd.Args[0], offset)
+			
+			if errRet == nil {
+				client.send(val)
+			} else {
+				client.send("0")
+				fmt.Println(errRet)
+			}
 	
 
 		case "SET":
 			
 			if len(cmd.Args) < 2 {
-				client.sendError(fmt.Errorf("SET expects atleast 2 arguments"))
+				client.send("-Error SET expects atleast 2 arguments")
 				continue
 			}
-			ok := false
 
 			if len(cmd.Args) == 2 {
-				ok = client.store.Set(cmd.Args[0], cmd.Args[1], NoExpiration)
+				ok,errRet := client.store.Set(cmd.Args[0], cmd.Args[1], NoExpiration)
+
+				
+
+				if ok == true {
+					client.send("+OK")
+				} else {
+					client.send("$-1")
+					fmt.Println(errRet)
+				}
+
+				continue
+
 			} else {
 				if cmd.Args[2] == "NX" {
-					ok = client.store.SetNX(cmd.Args[0], cmd.Args[1], NoExpiration)
+					ok, err := client.store.SetNX(cmd.Args[0], cmd.Args[1], NoExpiration)
+
+					if ok == true {
+						client.send("(integer) 1")
+					} else {
+						client.send("(integer) 0")
+						fmt.Println(err)
+					}
+
+					continue
+
 				} else if cmd.Args[2] == "XX" {
-					ok = client.store.SetXX(cmd.Args[0], cmd.Args[1], NoExpiration)
+					ok, err := client.store.SetXX(cmd.Args[0], cmd.Args[1], NoExpiration)
+
+					if ok == true {
+						client.send("(integer) 1")
+					} else {
+						client.send("(integer) 0")
+						fmt.Println(err)
+					}
+
+					continue
+
 				} else if cmd.Args[2] == "EX" {
 					if len(cmd.Args) == 4 {
 
@@ -155,10 +217,20 @@ func (client *client) serve() {
 							client.sendError(fmt.Errorf("SET EX expects time (seconds) in integer"))
 							continue
 						}
-						fmt.Println("SET EX val : ", val)
-						ok = client.store.Set(cmd.Args[0], cmd.Args[1], time.Duration(30 * val))
+						
+						ok,errRet := client.store.Set(cmd.Args[0], cmd.Args[1], (time.Duration(val) * time.Second))
+
+						if ok == true {
+							client.send("+OK")
+						} else {
+							client.send("$-1")
+							fmt.Println(errRet)
+						}
+
+						continue
+
 					} else {
-						client.sendError(fmt.Errorf("SET EX expects 4 arguments"))
+						client.send("-Error SET EX expects 4 arguments\r\n")
 						continue
 					}
 				} else if cmd.Args[2] == "PX" {
@@ -168,20 +240,26 @@ func (client *client) serve() {
 							client.sendError(fmt.Errorf("SET EX expects time (milliseconds) in integer"))
 							continue
 						}
-						ok = client.store.Set(cmd.Args[0], cmd.Args[1], time.Duration(30 * val))
+						ok,errRet := client.store.Set(cmd.Args[0], cmd.Args[1], (time.Duration(val) * time.Millisecond))
+
+						if ok == true {
+							client.send("+OK")
+						} else {
+							client.send("$-1")
+							fmt.Println(errRet)
+						}
+
+						continue
+
 					} else {
-						client.sendError(fmt.Errorf("SET PX expects 4 arguments"))
+						client.send("-Error SET EX expects 4 arguments\r\n")
 						continue
 					}
 				}
 
 			}
 
-			if ok == true {
-				fmt.Fprintf(client.conn, "+OK\r\n")
-			} else {
-				fmt.Fprintf(client.conn, "+Error\r\n")
-			}
+			client.send("-Error Invalid Set option")
 
 
 		case "SETBIT":
@@ -213,9 +291,15 @@ func (client *client) serve() {
 			}
 
 
-			client.store.SetBit(cmd.Args[0], offset, bitFlag, NoExpiration)
-			fmt.Fprintf(client.conn, "+OK\r\n")
-
+			bitret, errRet := client.store.SetBit(cmd.Args[0], offset, bitFlag, NoExpiration)
+			
+			if errRet == nil {
+				client.send(bitret)
+			} else {
+				client.send("0")
+				fmt.Println(err)
+			}
+		
 		
 		case "ZADD":
 			if len(cmd.Args) < 3 {
@@ -254,12 +338,13 @@ func (client *client) serve() {
 				continue
 			}
 
-			ok := client.store.ZADD(cmd.Args[0], &zaddMap)
+			memberAdded, errRet := client.store.ZADD(cmd.Args[0], &zaddMap)
 
-			if ok == true {
-				fmt.Fprintf(client.conn, "+OK\r\n")
+			if errRet == nil {
+				client.send(strconv.Itoa(memberAdded))
 			} else {
-				fmt.Fprintf(client.conn, "+Error\r\n")
+				client.send("0")
+				fmt.Println(errRet)
 			}
 
 		case "ZCARD":
@@ -268,12 +353,13 @@ func (client *client) serve() {
 				continue
 			}
 
-			count, ok := client.store.ZCARD(cmd.Args[0])
+			count, errRet := client.store.ZCARD(cmd.Args[0])
 
-			if ok == true {
+			if errRet == nil {
 				client.send(strconv.Itoa(count))
 			} else {
 				client.send(strconv.Itoa(0))
+				fmt.Println(errRet)
 			}
 
 		case "ZCOUNT":
@@ -300,12 +386,13 @@ func (client *client) serve() {
 				continue
 			}
 
-			count, ok := client.store.ZCOUNT(cmd.Args[0], min, max)
+			count, errRet := client.store.ZCOUNT(cmd.Args[0], min, max)
 
-			if ok == true {
+			if errRet == nil {
 				client.send(strconv.Itoa(count))
 			} else {
 				client.send(strconv.Itoa(0))
+				fmt.Println(errRet)
 			}
 
 		case "ZRANGE":
@@ -333,30 +420,31 @@ func (client *client) serve() {
 			}
 
 
-			retMap, ok := client.store.ZRANGE(cmd.Args[0], start, stop)
+			retMap, errRet := client.store.ZRANGE(cmd.Args[0], start, stop)
 
-			if ok == true {
+			if errRet == nil && retMap != nil {
 				if len(cmd.Args) == 4 && cmd.Args[3] == "WITHSCORES" {
-					for key,value := range retMap {
+					for key,value := range *retMap {
 						client.send(key)
 						client.send(strconv.Itoa(value))
 					}
 				} else {
-					for key,_ := range retMap {
+					for key,_ := range *retMap {
 						client.send(key)
 					}
 				}
 			} else {
-				fmt.Fprintf(client.conn, "+Error\r\n")
+				client.send("+Error")
+				fmt.Println(errRet)
 			}
 
 
 		case "SAVE":
 			ok := client.store.Save(dbFile)
 			if ok == true {
-				client.send("+OK\r\n") 
+				client.send("+OK") 
 			} else {
-				client.send("-Error DB save failed\r\n")
+				client.send("-Error DB save failed")
 			}
 
 		case "EXIT":

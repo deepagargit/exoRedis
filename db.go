@@ -1,31 +1,19 @@
+/* 
+	Copyright 2016 Deepak Agarwal
+	Author : Deepak Agarwal
+*/
+
 package main
 
 import (
 	"sync"
-	"encoding/gob"
-         "os"
-	 "github.com/emirpasic/gods/sets/treeset"
-	//"log"
-	  "fmt"
-	  "errors"
-	  "bytes"
-	  "time"
+	"github.com/emirpasic/gods/sets/treeset"
+	"fmt"
+	"time"
+	"errors"
+	"bytes"
 )
 
-const (
-	// For use with functions that take an expiration time.
-	NoExpiration time.Duration = -1
-	// For use with functions that take an expiration time. Equivalent to
-	// passing in the same expiration duration as was given to New() or
-	// NewFrom() when the cache was created (e.g. 5 minutes.)
-	DefaultExpiration time.Duration = 0
-)
-
-type mapData struct {
-	val string
-	Expiration int64
-	lock *sync.RWMutex
-}
 
 
 /*
@@ -34,44 +22,93 @@ type mapData struct {
   setmapData map[score] value is set - member1 member 2
 
 */
+
 type setmapData struct {
 	setEntry map[int]*treeset.Set
 	lock *sync.RWMutex
 }
 
+/*
+  Storing data for form SET key member
+  mapEntry map[key] value is pointer to mapData
+  mapData val is member
+*/
+
+type mapData struct {
+	val string
+	Expiration int64
+	lock *sync.RWMutex
+}
+
+/*
+  DB structure
+  
+  mapEntry is holding key-data pair
+  mapDBLock is glocal RW lock on mapEntry
+  mapData.lock is RW lock per key of mapEntry
+
+  setmapEntry is holding key-data pair
+  setmapData is holding score member1 member2 for a key
+  setmapDBLock is glocal RW lock on setmapEntry
+  setmapData.lock is RW lock per key of setmapEntry
+
+  Synchrinization
+  1. mapEnry
+     a. GET - Holds global read lock and key read lock for operation
+     b. SET - Holds global read lock and key write lock for operation, iff key present
+              Holds global write lock and key write lock for operation, iff key absent
+     c. DELETE - Holds global write lock for operation
+     d. DB SAVE\LOAD - Holds global write lock for operation
+
+     The scheme ensures 
+     i. GET\SET concurrent operations
+     ii. DELETE exclusive operation
+     iii. SAVE\LOAD exclusive operation
+
+  2. setmapEntry
+     a. ZRANGE\ZCOUNT\ZCARD - Holds key read lock for operation
+     b. ZADD - Holds global read lock and key write lock for operation, iff key present
+               Holds global write lock and key write lock for operation, iff key absent
+     c. DB SAVE\LOAD - Holds global write lock for operation
+
+     The scheme ensures 
+     i. ZRANGE\ZCOUNT\ZCARD\ZADD concurrent operations
+     ii. SAVE\LOAD exclusive operation
+*/
+
 type db struct {
 	mapEntry map[string]*mapData
-	mapDBLock *sync.Mutex
+	mapDBLock *sync.RWMutex
 	onEvicted  func(string, interface{})
 
 	setmapEntry map[string]*setmapData
-	setmapDBLock *sync.Mutex
+	setmapDBLock *sync.RWMutex
 	caretaker *caretaker
 }
 
 
+/*
 func (store *db) Close() error {
+	
+	fmt.Println("ctrl+c signal captured : ")
+	store.Save(dbFile)
 
-    fmt.Println("ctrl+c signal captured : ")
-		//time.Sleep(2000 * time.Second)
-		store.Save(dbFile)
-
-		fmt.Println("ctrl+c done")
+	fmt.Println("ctrl+c done")
 
 	return nil
 }
+*/
 
 
-func (store *db) delete(key string) (interface{}, bool) {
-	if store.onEvicted != nil {
-		if entry, found := store.mapEntry[key]; found {
-			delete(store.mapEntry, key)
-			return entry, true
-		}
-	}
-	delete(store.mapEntry, key)
-	return nil, false
+// Sets an (optional) function that is called with the key and value when an
+// item is evicted from the cache. (Including when it is deleted manually, but
+// not when it is overwritten.) Set to nil to disable.
+func (store *db) OnEvicted(f func(string, interface{})) {
+	store.mapDBLock.Lock()
+	store.onEvicted = f
+	store.mapDBLock.Unlock()
 }
+
 
 type keyAndValue struct {
 	key   string
@@ -80,6 +117,11 @@ type keyAndValue struct {
 
 // Delete all expired items from the cache.
 func (store *db) DeleteExpired() {
+	if store == nil {
+		fmt.Println("DeleteExpired : store is nil")
+		return
+	}
+
 	var evictedItems []keyAndValue
 	now := time.Now().UnixNano()
 
@@ -89,7 +131,7 @@ func (store *db) DeleteExpired() {
 	for key, entry := range store.mapEntry {
 		// "Inlining" of expired
 		if entry.Expiration > 0 && now > entry.Expiration {
-			entry, evicted := store.delete(key)
+			entry, evicted := store.Delete(key)
 			if evicted {
 				evictedItems = append(evictedItems, keyAndValue{key, entry})
 			}
@@ -102,148 +144,20 @@ func (store *db) DeleteExpired() {
 }
 
 
-// Sets an (optional) function that is called with the key and value when an
-// item is evicted from the cache. (Including when it is deleted manually, but
-// not when it is overwritten.) Set to nil to disable.
-func (store *db) OnEvicted(f func(string, interface{})) {
-	store.mapDBLock.Lock()
-	store.onEvicted = f
-	store.mapDBLock.Unlock()
-}
-
-func (store *db) Save(filename string) (bool){
-
-	 store.mapDBLock.Lock()
-	 store.setmapDBLock.Lock()
-
-	 defer store.mapDBLock.Unlock()
-	 defer store.setmapDBLock.Unlock()
-	 
-         // create a file
-         dataFile, err := os.Create(filename)
-
-         if err != nil {
-                 fmt.Println("Save Create error : " , err)
-                 return false
-         }
-
-         enc := gob.NewEncoder(dataFile)
-         err = enc.Encode(store)
-	 if err != nil {
-		fmt.Printf("Save Encode error : ", err)
-		return false
-	}
-
-         dataFile.Close()
-	 return true
-}
-
-
-func (store *db) Load(filename string) (bool){
-         // open data file
-
-         dataFile, err := os.Open(filename)
-
-         if err != nil {
-                 fmt.Println("Load Open error : ", err)
-                 return false
-         }
-
-         dec := gob.NewDecoder(dataFile)
-	 
-         err = dec.Decode(store)
-
-         if err != nil {
-                 fmt.Println("Load Decode error : ", err)
-                 return false
-         }
-
-         dataFile.Close()
-
-	 return true
- }
-
-
-
-func (store *db) MarshalBinary() ([]byte, error) {
-
+func (store *db) Delete(key string) (interface{}, bool) {
 	if store == nil {
-		return nil, errors.New(fmt.Sprintf("MarshalBinary : store nil"))
+		fmt.Println("Delete : store is nil")
+		return nil, false
 	}
 
-	if store.mapEntry == nil {
-		return nil, errors.New(fmt.Sprintf("MarshalBinary : store.mapEntry nil"))
-	}
-
-	if store.setmapEntry == nil {
-		return nil, errors.New(fmt.Sprintf("MarshalBinary : store.setmapEntry nil"))
-	}
-
-	var b bytes.Buffer
-	
-	//Marshal mapEntry
-	if len(store.mapEntry) != 0 {
-		fmt.Fprintln(&b, len(store.mapEntry))
-		
-		for key,value := range store.mapEntry {
-			fmt.Fprintln(&b, key)
-
-			//Marshal mapData.val
-			if value != nil {
-				fmt.Fprintln(&b, value.val)
-				fmt.Fprintln(&b, value.Expiration)
-				
-				//Marshal mapData.lock skipped - not required
-			} else {
-				return nil, errors.New(fmt.Sprintf("MarshalBinary : err store.mapEntry key :  %v value : nil", key))
-			}
-		}
-
-		
-	}
-
-	//Marshal mapDBLock skipped - not required
-	fmt.Fprintln(&b, len(store.setmapEntry))
-
-	//Marshal setmapEntry
-	if len(store.setmapEntry) != 0 {
-		
-		fmt.Println("len(store.setmapEntry) : ", len(store.setmapEntry))
-		
-		for key,value := range store.setmapEntry {
-			fmt.Fprintln(&b, key)
-			fmt.Println(" key : ", key)
-			
-			//Marshal setmapData.setEntry
-				fmt.Fprintln(&b, len(value.setEntry))
-				fmt.Println(" len(value.setEntry) : ", len(value.setEntry))
-
-				if value != nil {
-
-					for key2,value2 := range value.setEntry {
-						fmt.Fprintln(&b, key2)
-
-						if value2 != nil {
-
-							fmt.Fprintln(&b, value2.Size())
-							for _, v := range value2.Values() {
-								fmt.Fprintln(&b, fmt.Sprintf("%v",v))
-							}
-						} else {
-							return nil, errors.New(fmt.Sprintf("MarshalBinary : err store.setmapEntry key : %v setEntry key2 : %v value2 : nill", key, key2))
-						}
-					}
-				} else {
-					return nil, errors.New(fmt.Sprintf("MarshalBinary : err store.setmapEntry key :  %v value : nill", key))
-				}
-
-			//Marshal setmapData.lock skipped - not required
+	if store.onEvicted != nil {
+		if entry, found := store.mapEntry[key]; found {
+			delete(store.mapEntry, key)
+			return entry, true
 		}
 	}
-
-	//Marshal setmapLock skipped - not required
-
-	return b.Bytes(), nil
+	delete(store.mapEntry, key)
+	return nil, false
 }
 
 
@@ -252,202 +166,99 @@ func (store *db) MarshalBinary() ([]byte, error) {
 
 
 
-
-
-
-func (store *db) UnmarshalBinary(data []byte) error {
-	
+func (store *db) Get(key string) (string, error) {
 	if store == nil {
-		return errors.New(fmt.Sprintf("UnmarshalBinary : store nil"))
+		fmt.Println("Get : store is nil")
+		return "", errors.New(fmt.Sprint("GET : store is nil"))
 	}
 
-	if store.mapEntry == nil {
-		return errors.New(fmt.Sprintf("UnmarshalBinary : store.mapEntry nil"))
-	}
+	/* Take Global Read lock to hold Delete key until Get operation is finished */
+	store.mapDBLock.RLock()
+	defer store.mapDBLock.RUnlock()
 
-	if store.setmapEntry == nil {
-		return errors.New(fmt.Sprintf("UnmarshalBinary : store.setmapEntry nil"))
-	}
-
-	b := bytes.NewBuffer(data)
-
-	//UnMarshal mapEntry
-	var len int = 0
-	_, err := fmt.Fscanln(b, &len)
-	if err != nil {
-		return errors.New(fmt.Sprintf("UnmarshalBinary : mapEntry len nil"))
-	}
-	
-	for i:= 0 ; i<len; i++ {
-		var key string
-		var value string
-		var e int64
-		
-		_, err = fmt.Fscanln(b, &key)
-		if err != nil {
-			return errors.New(fmt.Sprintf("UnmarshalBinary : mapEntry key nil"))
-		}
-
-		_, err = fmt.Fscanln(b, &value)
-		if err != nil {
-			return errors.New(fmt.Sprintf("UnmarshalBinary : mapEntry val nil"))
-		}
-
-		_, err = fmt.Fscanln(b, &e)
-		if err != nil {
-			return errors.New(fmt.Sprintf("UnmarshalBinary : mapEntry expiration nil"))
-		}
-
-		mapEntry := &mapData{
-				val: value, 
-				Expiration: e,
-				lock: &sync.RWMutex{},
-				}
-
-		//UnMarshal mapData.lock skipped - not required
-
-		store.mapEntry[key] = mapEntry
-	}
-	
-	//UnMarshal setmapEntry
-	len = 0
-	_, err = fmt.Fscanln(b, &len)
-	if err != nil {
-		return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry len nil"))
-	}
-	
-	for i:= 0 ; i<len; i++ {
-		var key string
-		var len2 int
-		var key2 int
-		
-		_, err = fmt.Fscanln(b, &key)
-		if err != nil {
-			return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry key nil"))
-		}
-		fmt.Println(" key : ", key)
-
-		_, err = fmt.Fscanln(b, &len2)
-		if err != nil {
-			return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry key : %v setEntry len2 nil", key))
-		}
-		fmt.Println(" len2 : ", len2)
-
-		setmapEntry := &setmapData{
-					setEntry: make(map[int]*treeset.Set),
-					lock: &sync.RWMutex{},
-					}
-
-		for k:=0; k<len2; k++ {
-
-			_, err = fmt.Fscanln(b, &key2)
-			if err != nil {
-				return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry key : %v setEntry len2 : %v key nil", key, len2))
-			}
-			fmt.Println(" key2 : ", key2)
-
-			
-
-			setmapEntry.setEntry[key2] = treeset.NewWithStringComparator()
-
-			var setlen int = 0
-			_, err = fmt.Fscanln(b, &setlen)
-			if err != nil {
-				return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry key : %v setEntry len nil", key))
-			}
-			fmt.Println(" setlen : ", setlen)
-			
-			for j:=0; j< setlen; j++ {
-				var val string
-				_, err = fmt.Fscanln(b, &val)
-				if err != nil {
-					return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry key : %v setEntry len : %v key2 : %v value nil for cursetIndex : %v ", key, setlen, key2, j))
-				}
-
-				setmapEntry.setEntry[key2].Add(val)
-				fmt.Println(" key2 : ", key2 , " val : ", val)
-			}
-					
-		}
-		//UnMarshal setmapData.lock skipped - not required
-
-		store.setmapEntry[key] = setmapEntry
-
-	}
-
-	//UnMarshal setmapDBLock skipped - not required
-
-	return err
-}
-
-
-func (store *db) Get(key string) (string, bool) {
-	
 	entry, ok := store.mapEntry[key]
 
 	if ok == false {
-		return "", ok
+		return "", errors.New(fmt.Sprint("GET : key ", key, " not found"))
 	}
 
-	/* Take DB entry Rlock before get, this is lock per key entry */
+	/* Take DB entry Rlock before get, this is lock per key entry to have key level mutual exclusion between get and set */
 	entry.lock.RLock()
 	defer entry.lock.RUnlock()
 
-	return entry.val, ok
+	if len(entry.val) == 0 {
+		return entry.val, nil
+	}
+	
+	var b bytes.Buffer
+	for i := 0; i < len(entry.val); i++ {
+		var byt byte = entry.val[i]
+
+		// Printing ASCII with value range 33-126 as char and others as hex
+		if byt < 33 || byt > 126 {
+			fmt.Fprint(&b, "\\x")
+			fmt.Fprint(&b, fmt.Sprintf("%x",byt))
+		} else {
+			fmt.Fprint(&b, fmt.Sprint(string(entry.val[i])))
+		}
+	}
+
+	return string(b.Bytes()), nil
 }
 
 
-func (store *db) GetBit(key string, offset int) (string) {
-		
-	entry, ok := store.mapEntry[key]
+func (store *db) GetBit(key string, offset int) (string, error) {
+	if store == nil {
+		fmt.Println("GetBit : store is nil")
+		return "", errors.New(fmt.Sprint("GETBIT : store is nil"))
+	}
 
-	var val []byte = []byte(entry.val)
+	/* Take Global Read lock to hold Delete key until Get operation is finished */
+	store.mapDBLock.RLock()
+	defer store.mapDBLock.RUnlock()
+	
+	entry, ok := store.mapEntry[key]
+	
 	var bitFlag string = "0"
 
 	if ok == false {
-		return bitFlag
-	} else {
+		return "", errors.New(fmt.Sprint("GETBIT : key ", key, " not found"))
+	} 
 
-		/* Take DB entry Rlock before get, this is lock per key entry */
-		entry.lock.RLock()
-		defer entry.lock.RUnlock()
+	var val []byte = []byte(entry.val)
 
-		var sliceIndex int = (offset / 8) 
+	/* Take DB entry Rlock before get, this is lock per key entry to have key level mutual exclusion between get and set */
+	entry.lock.RLock()
+	defer entry.lock.RUnlock()
 
-		if sliceIndex < len(val) {
-			/*
-			log.Printf(" val = %s", string(val))
-			fmt.Println(" byte array : ", val)
-			for i:= 0; i < len(val); i++ {
-				log.Printf("i = %d byte = %d", i, val[i])
-			}
-			*/
+	var sliceIndex int = (offset / 8) 
 
-			byteData := val[sliceIndex]
+	if sliceIndex < len(val) {
 
-			byteoffset := (uint)(offset % 8)
-			//log.Printf("index = %d byte = %d byteoffset = %d", sliceIndex, byteData, byteoffset)
+		byteData := val[sliceIndex]
+
+		byteoffset := 7 - (uint)(offset % 8)
 			
-			if (byteData & (1 << byteoffset)) != 0 {
-				bitFlag = "1"
-			} else {
-				bitFlag = "0"
-			}
-
-				
-
-			//log.Printf("bitFlag = %s", bitFlag)
-
-			return bitFlag
+		if (byteData & (1 << byteoffset)) != 0 {
+			bitFlag = "1"
 		} else {
-			/* Out of index case */
-			return bitFlag
+			bitFlag = "0"
 		}
+
+		return bitFlag, nil
+	} else {
+		/* Out of index case */
+		return bitFlag, nil
 	}
+
 }
 
-func (store *db) Set(key string, val string, d time.Duration) (bool) {
-	
+func (store *db) Set(key string, val string, d time.Duration) (bool, error) {
+	if store == nil {
+		fmt.Println("Set : store is nil")
+		return false, errors.New(fmt.Sprint("SET : store is nil"))
+	}
+
 	var entry *mapData
 	var ok bool
 	var e int64
@@ -455,20 +266,24 @@ func (store *db) Set(key string, val string, d time.Duration) (bool) {
 	if d > 0 {
 		e = time.Now().Add(d).UnixNano()
 	}
+	
+	/* Take Global Read lock to hold Delete key or Save DB until Set operation is finished */
+	store.mapDBLock.RLock()
 
 	/* Check if db has the key entry */
 	entry, ok = store.mapEntry[key]
 
 	/* If entry not present */
 	if ok == false {
-		/* Take DB lock before creating entry for this key, to ensure only one entry gets created */
+		/* Take Global DB write lock before creating entry for this key, to ensure only one entry gets created */
+		store.mapDBLock.RUnlock()
 		store.mapDBLock.Lock()
-		defer store.mapDBLock.Unlock()
-		
-		/* Again Check if db has the key entry, between above if & db lock it is possible other routine has created this entry */
-		entry, ok = store.mapEntry[key]
 
-		if ok == false {
+		/* Again Check if db has the key entry, between above if & db lock it is possible other routine has created this entry */
+		var okrecheck bool
+		entry, okrecheck = store.mapEntry[key]
+
+		if okrecheck == false {
 			entry = &mapData{
 				val: val, 
 				Expiration : e,
@@ -479,26 +294,36 @@ func (store *db) Set(key string, val string, d time.Duration) (bool) {
 		}
 	}
 	
-	/* Take DB entry lock before set, this is lock per key entry */
+	/* Take DB entry lock before set, this is lock per key entry to prevent race-condition in multiple sets on same key */
 	entry.lock.Lock()
-	defer entry.lock.Unlock()
 
 	entry.val = val
 	entry.Expiration = e
 	store.mapEntry[key] = entry
 
-	/* Both locks got released in LIFO order, entry lock followed by db lock */
+	entry.lock.Unlock()
 
-	return true
+	/* Both locks got released in LIFO order, entry lock followed by db lock */
+	if ok == false {
+		store.mapDBLock.Unlock()
+	} else {
+		store.mapDBLock.RUnlock()
+	}
+
+	return true, nil
 }
 
 
-func (store *db) SetBit(key string, offset int, bit byte, d time.Duration) {
+func (store *db) SetBit(key string, offset int, bit byte, d time.Duration) (string, error){
+	if store == nil {
+		fmt.Println("SetBit : store is nil")
+		return "", errors.New(fmt.Sprint("SETBIT : store is nil"))
+	}
 
 	var sliceIndex int = (offset / 8) 
 	var sliceLength int = sliceIndex +1
 	
-	byteoffset := (uint)(offset % 8)
+	byteoffset := 7 - (uint)(offset % 8)
 	var val []byte 
 
 	var entry *mapData
@@ -508,6 +333,9 @@ func (store *db) SetBit(key string, offset int, bit byte, d time.Duration) {
 	if d > 0 {
 		e = time.Now().Add(d).UnixNano()
 	}
+	
+	/* Take Glocal Read lock to hold Delete key or Save DB until Set operation is finished */
+	store.mapDBLock.RLock()
 
 	/* Check if db has the key entry */
 	entry, ok = store.mapEntry[key]
@@ -515,13 +343,14 @@ func (store *db) SetBit(key string, offset int, bit byte, d time.Duration) {
 	/* If entry not present */
 	if ok == false {
 		/* Take DB lock before creating entry for this key, to ensure only one entry gets created */
+		store.mapDBLock.RUnlock()
 		store.mapDBLock.Lock()
-		defer store.mapDBLock.Unlock()
 		
 		/* Again Check if db has the key entry, between above if & db lock it is possible other routine has created this entry */
-		entry, ok = store.mapEntry[key]
+		var okrecheck bool
+		entry, okrecheck = store.mapEntry[key]
 
-		if ok == false {
+		if okrecheck == false {
 			entry = &mapData{
 				val: "", 
 				Expiration : e,
@@ -533,7 +362,6 @@ func (store *db) SetBit(key string, offset int, bit byte, d time.Duration) {
 	
 	/* Take DB entry lock before set, this is lock per key entry */
 	entry.lock.Lock()
-	defer entry.lock.Unlock()
 	
 
 	if ok == true {
@@ -560,10 +388,19 @@ func (store *db) SetBit(key string, offset int, bit byte, d time.Duration) {
 		}	
 	}
 
+	var oldBit byte = 0
+	var maskBit byte = (1 << byteoffset)
+	oldBit = val[sliceIndex] & maskBit
+	bitFlag := ""
+	if oldBit == 0 {
+		bitFlag = "0"
+	} else {
+		bitFlag = "1"
+	}
+
 	if bit == 0 {
 		var mask byte = ^(1 << byteoffset)
 		val[sliceIndex] = val[sliceIndex] & mask
-
 	} else {
 		var mask byte = (1 << byteoffset)
 		val[sliceIndex] = val[sliceIndex] | mask
@@ -573,54 +410,24 @@ func (store *db) SetBit(key string, offset int, bit byte, d time.Duration) {
 	entry.Expiration = e
 	store.mapEntry[key] = entry
 
-	//fmt.Printf("val = ", entry.val)
+	entry.lock.Unlock()
 	
-	//log.Printf("sliceLength = %d sliceIndex = %d ", sliceLength, sliceIndex)
-	
-}
-
-/*
-
-func (store *db) SetEX(key string, val string) {
-	store.mapDBLock.Lock()
-	defer store.mapDBLock.Unlock()
-
-	entry, ok := store.mapEntry[key]
-	if ok == true {
-		entry.val = val
-		store.mapEntry[key] = entry
+	if ok == false {
+		store.mapDBLock.Unlock()
 	} else {
-		entry := &mapData{
-			val: val, 
-			lock: &sync.RWMutex{},
-			}
-		
-		store.mapEntry[key] = entry
+		store.mapDBLock.RUnlock()
 	}
+
+	return bitFlag, nil
 }
 
-func (store *db) SetPX(key string, val string) {
-	store.mapDBLock.Lock()
-	defer store.mapDBLock.Unlock()
 
-	entry, ok := store.mapEntry[key]
-	if ok == true {
-		entry.val = val
-		store.mapEntry[key] = entry
-	} else {
-		entry := &mapData{
-			val: val, 
-			lock: &sync.RWMutex{},
-			}
-		
-		store.mapEntry[key] = entry
+
+func (store *db) SetNX(key string, val string, d time.Duration) (bool, error) {
+	if store == nil {
+		fmt.Println("SetNX : store is nil")
+		return false, errors.New(fmt.Sprint("SET NX : store is nil"))
 	}
-}
-
-*/
-
-
-func (store *db) SetNX(key string, val string, d time.Duration) (bool) {
 	
 	var entry *mapData
 	var ok bool
@@ -630,16 +437,20 @@ func (store *db) SetNX(key string, val string, d time.Duration) (bool) {
 		e = time.Now().Add(d).UnixNano()
 	}
 
+	/* Take Glocal Read lock to hold Delete key or Save DB until Set operation is finished */
+	store.mapDBLock.RLock()
+
 	/* Check if db has the key entry */
 	entry, ok = store.mapEntry[key]
 
 	/* If entry not present */
 	if ok == true {
-		return false
+		store.mapDBLock.RUnlock()
+		return false, errors.New(fmt.Sprintf("SET NX : err store.setmapEntry key", key, "present"))
 	} else {
 		/* Take DB lock before creating entry for this key, to ensure only one entry gets created */
+		store.mapDBLock.RUnlock()
 		store.mapDBLock.Lock()
-		defer store.mapDBLock.Unlock()
 		
 		/* Again Check if db has the key entry, between above if & db lock it is possible other routine has created this entry */
 		entry, ok = store.mapEntry[key]
@@ -656,21 +467,32 @@ func (store *db) SetNX(key string, val string, d time.Duration) (bool) {
 	
 	/* Take DB entry lock before set, this is lock per key entry */
 	entry.lock.Lock()
-	defer entry.lock.Unlock()
 
 	entry.val = val
 	entry.Expiration = e
 	store.mapEntry[key] = entry
 
-	/* Both locks got released in LIFO order, entry lock followed by db lock */
+	entry.lock.Unlock()
 
-	return true
+	/* Both locks got released in LIFO order, entry lock followed by db lock */
+	if ok == false {
+		store.mapDBLock.Unlock()
+	} else {
+		store.mapDBLock.RUnlock()
+	}
+
+	return true, nil
 }
 
 
-func (store *db) SetXX(key string, val string, d time.Duration) (bool){
-	store.mapDBLock.Lock()
-	defer store.mapDBLock.Unlock()
+func (store *db) SetXX(key string, val string, d time.Duration) (bool, error){
+	if store == nil {
+		fmt.Println("SetXX : store is nil")
+		return false, errors.New(fmt.Sprint("SET XX : store is nil"))
+	}
+
+	store.mapDBLock.RLock()
+	defer store.mapDBLock.RUnlock()
 
 	entry, ok := store.mapEntry[key]
 	if ok == true {
@@ -680,9 +502,11 @@ func (store *db) SetXX(key string, val string, d time.Duration) (bool){
 
 		entry.val = val
 		/* entry is pointer so no need to set again in map. store.mapEntry[key] = entry */
+	} else {
+		return ok, errors.New(fmt.Sprint("SET XX : key ", key, " not present"))
 	}
 
-	return ok
+	return ok, nil
 }
 
 
@@ -691,22 +515,23 @@ func (store *db) SetXX(key string, val string, d time.Duration) (bool){
 
 
 /* You may assume single [score member] inserts.  */
-func (store *db) ZADD(key string, zaddMap *map[string]int) (bool) {
+func (store *db) ZADD(key string, zaddMap *map[string]int) (int, error) {
+	var memberAdded int = 0
 
 	if store == nil {
 		fmt.Println("ZADD : store is nil")
-		return false
+		return 0, errors.New(fmt.Sprint("ZADD : store is nil"))
 	}
 
 	if zaddMap == nil {
 		fmt.Println("ZADD : argument zaddMap is nil")
-		return false
+		return 0, errors.New(fmt.Sprint("ZADD : Internal error"))
 	}
-
-	fmt.Println(*zaddMap)
 
 	var entry *setmapData
 	var ok bool
+
+	store.setmapDBLock.RLock()
 
 	/* Check if db has the key entry */
 	entry, ok = store.setmapEntry[key]
@@ -714,13 +539,14 @@ func (store *db) ZADD(key string, zaddMap *map[string]int) (bool) {
 	/* If entry not present */
 	if ok == false {
 		/* Take DB lock before creating entry for this key, to ensure only one entry gets created */
+		store.setmapDBLock.RUnlock()
 		store.setmapDBLock.Lock()
-		defer store.setmapDBLock.Unlock()
 		
 		/* Again Check if db has the key entry, between above if & db lock it is possible other routine has created this entry */
-		entry, ok = store.setmapEntry[key]
+		var okrecheck bool
+		entry, okrecheck = store.setmapEntry[key]
 
-		if ok == false {
+		if okrecheck == false {
 			entry = &setmapData{
 				setEntry: make(map[int]*treeset.Set),
 				lock: &sync.RWMutex{},
@@ -733,13 +559,13 @@ func (store *db) ZADD(key string, zaddMap *map[string]int) (bool) {
 	
 	/* Take DB entry lock before set, this is lock per key entry */
 	entry.lock.Lock()
-	defer entry.lock.Unlock()
 
 	for member, score := range *zaddMap {
 
 		/* Remove if same member exist at any score */
 		for _,value := range entry.setEntry {
 			if true == value.Contains(member) {
+				memberAdded = memberAdded - 1
 				value.Remove(member)
 			}
 		}
@@ -750,22 +576,35 @@ func (store *db) ZADD(key string, zaddMap *map[string]int) (bool) {
 		}
 
 		entry.setEntry[score].Add(member)	
+		memberAdded = memberAdded + 1
 	}
 	
 	store.setmapEntry[key] = entry
 
+	entry.lock.Unlock()
+
 	/* Both locks got released in LIFO order, entry lock followed by db lock */
+	if ok == false {
+		store.setmapDBLock.Unlock()
+	} else {
+		store.setmapDBLock.RUnlock()
+	}
 	
-	return true
+	return memberAdded, nil
 
 }
 
-func (store *db) ZCARD(key string) (int, bool) {
+func (store *db) ZCARD(key string) (int, error) {
+	if store == nil {
+		fmt.Println("ZCARD : store is nil")
+		return 0, errors.New(fmt.Sprint("ZCARD : store is nil"))
+	}
+
 	entry, ok := store.setmapEntry[key]
 	var count int = 0
 
 	if ok == false {
-		return count, ok
+		return count, errors.New(fmt.Sprint("ZCARD : key ", key, " not found"))
 	}
 
 	/* Take DB entry Rlock before get, this is lock per key entry */
@@ -776,16 +615,21 @@ func (store *db) ZCARD(key string) (int, bool) {
 		count = count + value.Size() 
 	}
 
-	return count, ok
+	return count, nil
 }
 
 /* Assume min and max are always inclusive. ie, You do not need to support the '(' notation for exclusive ranges */
-func (store *db) ZCOUNT(key string, min int, max int) (int, bool) {  
+func (store *db) ZCOUNT(key string, min int, max int) (int, error) {  
+	if store == nil {
+		fmt.Println("ZCARD : store is nil")
+		return 0, errors.New(fmt.Sprint("ZCOUNT : store is nil"))
+	}
+
 	entry, ok := store.setmapEntry[key]
 	var count int = 0
 
 	if ok == false {
-		return count, ok
+		return count, errors.New(fmt.Sprint("ZCOUNT : key ", key, "not found"))
 	}
 
 	/* Take DB entry Rlock before get, this is lock per key entry */
@@ -799,15 +643,20 @@ func (store *db) ZCOUNT(key string, min int, max int) (int, bool) {
 		}
 	}
 
-	return count, ok
+	return count, nil
 }
 
-func (store *db) ZRANGE(key string, start int, stop int) (map[string]int, bool) {
+func (store *db) ZRANGE(key string, start int, stop int) (*map[string]int, error) {
+	if store == nil {
+		fmt.Println("ZRANGE : store is nil")
+		return nil, errors.New(fmt.Sprint("ZADD : store is nil"))
+	}
+
 	entry, ok := store.setmapEntry[key]
 	retMap := make(map[string]int)
 
 	if ok == false {
-		return retMap, ok
+		return nil, errors.New(fmt.Sprint("ZRANGE : key ", key, " not found"))
 	}
 
 	/* Take DB entry Rlock before get, this is lock per key entry */
@@ -816,12 +665,10 @@ func (store *db) ZRANGE(key string, start int, stop int) (map[string]int, bool) 
 	
 	for key,value := range entry.setEntry {
 		if key >= start && key <= stop {
-			fmt.Println("set : ", value.String())
 
 			items := []string{}
 			for _, v := range value.Values() {
 				items = append(items, fmt.Sprintf("%v", v))
-				fmt.Println("v : ", v)
 			}
 
 			fmt.Println("items : ", items)
@@ -829,12 +676,10 @@ func (store *db) ZRANGE(key string, start int, stop int) (map[string]int, bool) 
 			for _, elementString := range items {
 				retMap[elementString] = key
 			}
-
-			fmt.Println("retMap : ", retMap)
 		}
 	}
 
-	return retMap, ok
+	return &retMap, nil
 }
 
 

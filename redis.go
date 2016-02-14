@@ -1,8 +1,7 @@
 
 /* 
-   Compile by go build
-
-   Run by ./exoRedis
+	Copyright 2016 Deepak Agarwal
+	Author : Deepak Agarwal
 */
 
 
@@ -17,39 +16,51 @@ import (
 	"syscall"
 	"sync"
 	"time"
-	//DEATH "github.com/vrecan/death"
-	//SYS "syscall"
-	//"io"
 )
 
 
-const dbFile string = "exoRedisDBFile.gob"
+const (
+	// Port no for Server to listen
+	addr string = ":15000"
 
-const timeInterval = time.Duration(30 * time.Second)
+	// File name to store the DB on disk
+	dbFile string = "exoRedisDBFile.gob"
+
+	// Time interval to run the cleanup of expired map entry
+	timeInterval = time.Duration(30 * time.Second)
+
+	// For use with functions that take an expiration time.
+	NoExpiration time.Duration = -1
+)
+
 
 func main() {
 	log.Printf("Server started\n")
-	addr := ":15000"
-
+	
+	// Start the Server to listen at port number addr
 	listener, err := net.Listen("tcp", addr)
 	
 	if err != nil {
 		log.Printf("Error: listen(): %s", err)
 		os.Exit(1)
 	}
-
-	log.Printf("Accepting connections at: %s", addr)
+	
+	// Create the db instance
 	store := &db{
 		mapEntry: make(map[string]*mapData),
-		mapDBLock: &sync.Mutex{},
+		mapDBLock: &sync.RWMutex{},
 		onEvicted: display,
 		setmapEntry: make(map[string]*setmapData),
-		setmapDBLock: &sync.Mutex{},
+		setmapDBLock: &sync.RWMutex{},
 	}
 
+	// Run the Caretaker to periodicly clean the expired map entry
 	runCaretaker(store, timeInterval)
-	defer stopCaretaker(store)
 
+	// Stop the Caretaker with the Server exit
+	defer stopCaretaker(store)
+	
+	// Handle initialization of db with db input file from user
 	if len(os.Args) > 1 {
 
 		dbFileLoad := os.Args[1]
@@ -59,12 +70,14 @@ func main() {
 		}
 	}
 	
+	// Logic to handle the sever shutdown (ie, Ctrl-C or SIGINT)
 	sigs := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
 	var sigCheck bool = false
 
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-
+	
+	// Anonymous go routine to handle sever shutdown and save db to disk
 	go func(store *db, file string) {
 
 		sig := <-sigs
@@ -72,10 +85,14 @@ func main() {
 
 		fmt.Println("Server captured", sig, "signal")
 		listener.Close()
+
 		store.Save(file)
 		done <- true	
 	} (store, dbFile)
 	
+	// Server listening for incoming connections
+	log.Printf("Accepting connections at: %s", addr)
+
 	var id int64
 	for {
 		conn, err := listener.Accept()
@@ -94,52 +111,13 @@ func main() {
 		go client.serve()
 	}
 	
+	// If server shutdown signal, wait for shutdown handler to finish
 	if sigCheck == true {
-		fmt.Println("Server awaiting exit ...")
+		fmt.Println("Server awaiting shutdown handler ...")
 		<-done
 	}
+
         fmt.Println("Server Exiting")	
-}
-
-
-
-func display(key string, value interface{}) {
-	entry := value.(*mapData)
-	fmt.Println("Evicted - key : ", key, "  val : ", entry.val, "  Expiration : ", entry.Expiration, "  Now: ", time.Now().UnixNano())
-}
-
-
-type caretaker struct {
-	Interval time.Duration
-	stop     chan bool
-}
-
-
-func (c *caretaker) Run(store *db) {
-	c.stop = make(chan bool)
-	ticker := time.NewTicker(c.Interval)
-	for {
-		select {
-		case <-ticker.C:
-			store.DeleteExpired()
-		case <-c.stop:
-			ticker.Stop()
-			return
-		}
-	}
-}
-
-
-func stopCaretaker(store *db) {
-	store.caretaker.stop <- true
-}
-
-func runCaretaker(store *db, ci time.Duration) {
-	c := &caretaker{
-		Interval: ci,
-	}
-	store.caretaker = c
-	go c.Run(store)
 }
 
 
