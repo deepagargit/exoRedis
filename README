@@ -4,11 +4,11 @@ yum install git -y
 yum install golang -y
 
 2. Clone the repository
-$ git clone https://github.com/deepagargit/exoredis ~/exoredis
-$ cd ~/exoredis
+$ git clone https://github.com/deepagargit/exoRedis ~/exoRedis
+$ cd ~/exoRedis
 
 3. Set the GOPATH
-$ export GOPATH = ~/exoredis
+$ export GOPATH = ~/exoRedis
 
 4. Install golang packages 
 $ go get github.com/emirpasic/gods/sets/treeset
