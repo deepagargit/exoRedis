@@ -8,7 +8,7 @@ $ git clone https://github.com/deepagargit/exoRedis ~/exoRedis
 $ cd ~/exoRedis
 
 3. Set the GOPATH
-$ export GOPATH = ~/exoRedis
+$ export GOPATH=~/exoRedis
 
 4. Install golang packages 
 $ go get github.com/emirpasic/gods/sets/treeset
