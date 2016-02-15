@@ -176,3 +176,104 @@ g. SET PX Test
 
 	GET a10
 	(nil)
+
+h. ZADD\ZRANGE\ZCOUNT\ZCARD Test 
+	ZADD a1 1 e 1 d 2 g 2 h 4 k
+	5
+	ZADD a2 3 d 5 f 6 h
+	3
+	ZRANGE a1 1 3
+	h
+	d
+	e
+	g
+	ZRANGE a1 1 4
+	g
+	h
+	k
+	d
+	e
+	ZRANGE a2 1 4 WITHSCORES
+	d
+	3
+	ZRANGE a2 1 9 WITHSCORES
+	d
+	3
+	f
+	5
+	h
+	6
+	ZCARD a1
+	5
+	ZCARD a2
+	3
+	ZCOUNT a1 1 9
+	5
+	ZCOUNT a2 1 2
+	0
+	ZCOUNT a2 1 5
+	2
+
+i. SAVE Test
+	SET a1 v1
+	+OK
+	GET a1
+	v1
+	SET a2 v2 EX 600
+	+OK
+	GET a2
+	v2
+	SAVE
+	+OK
+
+Reconnect Server and Client
+Server - 54.213.101.199
+       - Reload the saved DB
+	$ ./exoredis exoRedisDBFile.gob
+	2016/02/15 04:03:06 Server started
+	2016/02/15 04:03:06 Accepting connections at: :15000
+	2016/02/15 04:03:10 Client #1: Accepted connection: 172.31.15.146:15000
+
+Client - 172.31.15.146
+	$ telnet 54.213.101.199 15000
+	Trying 54.213.101.199...
+	Connected to 54.213.101.199.
+	Escape character is '^]'.
+	GET a1
+	v1
+	GET a2
+	v2
+	GET a5
+	(nil)
+
+	ZRANGE a1 1 9 WITHSCORES
+	k
+	4
+	d
+	1
+	e
+	1
+	g
+	2
+	h
+	2
+	ZRANGE a2 1 9 WITHSCORES
+	d
+	3
+	f
+	5
+	h
+	6
+
+	Wait for 10 mins since the a2 key creation, save preserves the expiry time
+	Evicted - key :  a2   val :  v2   Expiration :  1455509553987616957   Now:  145509556049938797
+	GET a2
+	(nil)
+
+
+
+j. Server Shutdown Test
+
+	?Server captured interrupt signal
+	Server awaiting shutdown handler ...
+	Server Exiting
