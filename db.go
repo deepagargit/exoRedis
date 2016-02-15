@@ -671,7 +671,6 @@ func (store *db) ZRANGE(key string, start int, stop int) (*map[string]int, error
 				items = append(items, fmt.Sprintf("%v", v))
 			}
 
-			fmt.Println("items : ", items)
 
 			for _, elementString := range items {
 				retMap[elementString] = key

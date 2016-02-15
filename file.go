@@ -118,15 +118,12 @@ func (store *db) MarshalBinary() ([]byte, error) {
 	//Marshal setmapEntry
 	if len(store.setmapEntry) != 0 {
 		
-		fmt.Println("len(store.setmapEntry) : ", len(store.setmapEntry))
 		
 		for key,value := range store.setmapEntry {
 			fmt.Fprintln(&b, key)
-			fmt.Println(" key : ", key)
 			
 			//Marshal setmapData.setEntry
 				fmt.Fprintln(&b, len(value.setEntry))
-				fmt.Println(" len(value.setEntry) : ", len(value.setEntry))
 
 				if value != nil {
 
@@ -235,13 +232,11 @@ func (store *db) UnmarshalBinary(data []byte) error {
 		if err != nil {
 			return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry key nil"))
 		}
-		fmt.Println(" key : ", key)
 
 		_, err = fmt.Fscanln(b, &len2)
 		if err != nil {
 			return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry key : %v setEntry len2 nil", key))
 		}
-		fmt.Println(" len2 : ", len2)
 
 		setmapEntry := &setmapData{
 					setEntry: make(map[int]*treeset.Set),
@@ -254,7 +249,6 @@ func (store *db) UnmarshalBinary(data []byte) error {
 			if err != nil {
 				return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry key : %v setEntry len2 : %v key nil", key, len2))
 			}
-			fmt.Println(" key2 : ", key2)
 
 			
 
@@ -265,7 +259,6 @@ func (store *db) UnmarshalBinary(data []byte) error {
 			if err != nil {
 				return errors.New(fmt.Sprintf("UnmarshalBinary : setmapEntry key : %v setEntry len nil", key))
 			}
-			fmt.Println(" setlen : ", setlen)
 			
 			for j:=0; j< setlen; j++ {
 				var val string
@@ -275,7 +268,6 @@ func (store *db) UnmarshalBinary(data []byte) error {
 				}
 
 				setmapEntry.setEntry[key2].Add(val)
-				fmt.Println(" key2 : ", key2 , " val : ", val)
 			}
 					
 		}
